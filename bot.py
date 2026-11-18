@@ -62,7 +62,10 @@ def parse_time(line):
 
 
 def parse_ltleague_post(post, keywords):
-    """Специальный парсер для формата LT League (блоки с ⚽️, 🏟, временем)."""
+    """Строгий парсер для формата LT League.
+    Обрабатывает ТОЛЬКО блоки, которые начинаются с эмодзи ⚽️.
+    Все остальные строки (включая 'Отпись ...') игнорируются.
+    """
     text = post["text"]
     results = []
     
@@ -70,7 +73,12 @@ def parse_ltleague_post(post, keywords):
     blocks = re.split(r'(?=⚽️)', text)
     
     for block in blocks:
-        if not block.strip():
+        # Если блок не содержит ⚽️ — это не матч, пропускаем
+        if '⚽️' not in block:
+            continue
+            
+        # Если в блоке есть слово 'отпись' (в любом регистре) — пропускаем
+        if 'отпись' in block.lower():
             continue
             
         # Проверяем, есть ли ключевые слова в этом блоке
@@ -171,7 +179,7 @@ def collect():
     for ch in CFG["channels"]:
         src = ch["source"]
         keywords = [k.lower() for k in ch["keywords"]]
-        parser_type = ch.get("parser", "default") # Поддержка разных парсеров
+        parser_type = ch.get("parser", "default")
         
         try:
             posts = fetch_private(src[1:]) if src.startswith("+") else fetch_public(src)
@@ -193,7 +201,7 @@ def collect():
                         if not prev or m["posted"] > prev["posted"]:
                             best[key] = m
             else:
-                # Стандартный парсер
+                # Стандартный парсер (только для каналов без parser: ltleague)
                 current = post_day
                 for raw in p["text"].split("\n"):
                     line = raw.strip()
@@ -226,9 +234,6 @@ def render(matches):
         d = m["date"]
         when = f"{WEEKDAYS[d.weekday()]}, {d:%d.%m}"
         when += f" в {m['time']}" if m["time"] else " (время уточняется)"
-        
-        # html.escape нужен только для ссылки и текста, но так как мы 
-        # добавили перенос строки в текст, html.escape не сломает \n
         safe_text = html.escape(m['text']).replace('\n', '<br>')
         out.append(f"• <b>{when}</b>\n  {safe_text} (<a href=\"{m['link']}\">пост</a>)")
     return "\n".join(out)
