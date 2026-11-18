@@ -62,46 +62,41 @@ def parse_time(line):
 
 
 def parse_ltleague_post(post, keywords):
-    """Строгий парсер для формата LT League.
-    Обрабатывает ТОЛЬКО блоки, которые похожи на матч:
-    есть ⚽️, две команды в кавычках и время в формате ЧЧ:ММ.
+    """Гибкий парсер для формата LT League.
+    Ищет пары команд в кавычках, вырезает блок до следующего матча,
+    ищет там время и стадион.
     """
     text = post["text"]
     results = []
     
-    # Разбиваем пост на блоки, начиная с эмодзи мяча
-    blocks = re.split(r'(?=⚽️)', text)
+    # Ищем все пары команд в тексте поста
+    matches = list(re.finditer(r'«([^»]+)»\s*[-—]\s*«([^»]+)»', text))
     
-    for block in blocks:
-        # 1. Блок должен содержать эмодзи мяча
-        if '⚽️' not in block:
-            continue
-            
-        # 2. В блоке не должно быть служебных слов
-        if 'отпись' in block.lower():
-            continue
-            
-        # 3. Проверяем, есть ли ключевые слова
-        if not any(k in block.lower() for k in keywords):
-            continue
-            
-        # 4. Ищем команды: «Команда 1» — «Команда 2»
-        m_teams = re.search(r'«([^»]+)»\s*[-—]\s*«([^»]+)»', block)
-        if not m_teams:
-            continue
+    for i, m_teams in enumerate(matches):
         teams = f"«{m_teams.group(1)}» — «{m_teams.group(2)}»"
         
-        # 5. Обязательно должно быть время
-        m_time = re.search(r'(\d{2}:\d{2})', block)
-        if not m_time:
+        # Проверяем, есть ли ключевое слово в названиях команд
+        if not any(k in teams.lower() for k in keywords):
             continue
-        time_str = m_time.group(1)
+            
+        # Определяем блок текста, относящийся к этому матчу (от текущего до следующего)
+        start_pos = m_teams.start()
+        end_pos = matches[i+1].start() if i + 1 < len(matches) else len(text)
+        block = text[start_pos:end_pos]
         
-        # Ищем стадион: 🏟...
+        # Если в блоке или в названии команд есть слово "отпись", пропускаем
+        if 'отпись' in block.lower() or 'отпись' in teams.lower():
+            continue
+            
+        # Ищем время (берем первое попавшееся в блоке)
+        m_time = re.search(r'(\d{2}:\d{2})', block)
+        time_str = m_time.group(1) if m_time else ""
+        
+        # Ищем стадион (все, что после эмодзи 🏟)
         m_stadium = re.search(r'🏟[^\w]*\s*(.+)', block)
         stadium = m_stadium.group(1).strip() if m_stadium else ""
         
-        # Ищем дату в блоке (если есть), иначе берем день публикации поста
+        # Ищем дату (если нет в блоке, берем дату публикации поста)
         match_date = parse_date(block, post["posted"].date()) or post["posted"].date()
         
         display_text = teams
@@ -116,6 +111,7 @@ def parse_ltleague_post(post, keywords):
             "posted": post["posted"],
             "link": post["link"]
         })
+        
     return results
 
 
@@ -188,7 +184,8 @@ def collect():
             
         for p in posts:
             post_day = p["posted"].date()
-            if post_day < today - timedelta(days=2):
+            # Увеличили окно поиска постов до 14 дней (чтобы захватить расписание, выложенное заранее)
+            if post_day < today - timedelta(days=14):
                 continue
                 
             if parser_type == "ltleague":
@@ -200,7 +197,6 @@ def collect():
                         if not prev or m["posted"] > prev["posted"]:
                             best[key] = m
             else:
-                # Стандартный парсер (только для каналов без parser: ltleague)
                 current = post_day
                 for raw in p["text"].split("\n"):
                     line = raw.strip()
