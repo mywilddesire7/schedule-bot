@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "*/30 5-21 * * *"   # каждые 30 минут, время UTC
   workflow_dispatch:             # ручной запуск кнопкой
+    inputs:
+      force:
+        description: "Отправить расписание в беседу прямо сейчас"
+        type: boolean
+        default: false
 
 permissions:
   contents: write                # чтобы сохранять state.json
@@ -25,7 +30,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - run: python bot.py
+      - run: python bot.py ${{ inputs.force && '--force' || '' }}
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           TG_API_ID: ${{ secrets.TG_API_ID }}
