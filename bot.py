@@ -63,8 +63,8 @@ def parse_time(line):
 
 def parse_ltleague_post(post, keywords):
     """Строгий парсер для формата LT League.
-    Обрабатывает ТОЛЬКО блоки, которые начинаются с эмодзи ⚽️.
-    Все остальные строки (включая 'Отпись ...') игнорируются.
+    Обрабатывает ТОЛЬКО блоки, которые похожи на матч:
+    есть ⚽️, две команды в кавычках и время в формате ЧЧ:ММ.
     """
     text = post["text"]
     results = []
@@ -73,38 +73,37 @@ def parse_ltleague_post(post, keywords):
     blocks = re.split(r'(?=⚽️)', text)
     
     for block in blocks:
-        # Если блок не содержит ⚽️ — это не матч, пропускаем
+        # 1. Блок должен содержать эмодзи мяча
         if '⚽️' not in block:
             continue
             
-        # Если в блоке есть слово 'отпись' (в любом регистре) — пропускаем
+        # 2. В блоке не должно быть служебных слов
         if 'отпись' in block.lower():
             continue
             
-        # Проверяем, есть ли ключевые слова в этом блоке
+        # 3. Проверяем, есть ли ключевые слова
         if not any(k in block.lower() for k in keywords):
             continue
             
-        # Ищем команды: «Команда 1» — «Команда 2»
+        # 4. Ищем команды: «Команда 1» — «Команда 2»
         m_teams = re.search(r'«([^»]+)»\s*[-—]\s*«([^»]+)»', block)
         if not m_teams:
             continue
         teams = f"«{m_teams.group(1)}» — «{m_teams.group(2)}»"
         
+        # 5. Обязательно должно быть время
+        m_time = re.search(r'(\d{2}:\d{2})', block)
+        if not m_time:
+            continue
+        time_str = m_time.group(1)
+        
         # Ищем стадион: 🏟...
         m_stadium = re.search(r'🏟[^\w]*\s*(.+)', block)
         stadium = m_stadium.group(1).strip() if m_stadium else ""
         
-        # Ищем время. Сначала пробуем время по Москве (🇷🇺), если нет - берем первое попавшееся
-        m_time = re.search(r'🇷🇺\s*(\d{2}:\d{2})', block)
-        if not m_time:
-            m_time = re.search(r'(\d{2}:\d{2})', block)
-        time_str = m_time.group(1) if m_time else ""
-        
         # Ищем дату в блоке (если есть), иначе берем день публикации поста
         match_date = parse_date(block, post["posted"].date()) or post["posted"].date()
         
-        # Формируем красивый текст
         display_text = teams
         if stadium:
             display_text += f"\n🏟 {stadium}"
