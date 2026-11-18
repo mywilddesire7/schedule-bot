@@ -66,11 +66,9 @@ def parse_ltleague_post(post, keywords, debug=False):
     text = post["text"]
     results = []
     
-    # Ищем все пары команд (добавил поддержку разных тире: -, —, –)
+    # Ищем все пары команд
     matches = list(re.finditer(r'«([^»]+)»\s*[-—–]\s*«([^»]+)»', text))
-    if debug:
-        print(f"    [DEBUG] Найдено пар «Команда1» - «Команда2»: {len(matches)}")
-        
+    
     for i, m_teams in enumerate(matches):
         teams = f"«{m_teams.group(1)}» — «{m_teams.group(2)}»"
         
@@ -78,17 +76,12 @@ def parse_ltleague_post(post, keywords, debug=False):
         if not any(k in teams.lower() for k in keywords):
             continue
             
-        if debug:
-            print(f"    [DEBUG] Найден интересующий матч: {teams}")
-            
         # Определяем блок текста, относящийся к этому матчу
         start_pos = m_teams.start()
         end_pos = matches[i+1].start() if i + 1 < len(matches) else len(text)
         block = text[start_pos:end_pos]
         
         if 'отпись' in block.lower() or 'отпись' in teams.lower():
-            if debug:
-                print(f"    [DEBUG] Пропущено (слово 'отпись')")
             continue
             
         # Ищем время
@@ -150,14 +143,9 @@ def collect(debug=False):
         src = ch["source"]
         keywords = [k.lower() for k in ch["keywords"]]
         parser_type = ch.get("parser", "default")
-        
-        if debug:
-            print(f"--- Канал: {src} (парсер: {parser_type}) ---")
             
         try:
-            posts = fetch_public(src) # Оставил только публичные каналы для теста
-            if debug:
-                print(f"[DEBUG] Успешно получено постов: {len(posts)}")
+            posts = fetch_public(src)
         except Exception as e:
             print(f"[{src[:6]}...] ошибка: {e}", file=sys.stderr)
             continue
@@ -170,7 +158,8 @@ def collect(debug=False):
             if parser_type == "ltleague":
                 parsed_matches = parse_ltleague_post(p, keywords, debug)
                 for m in parsed_matches:
-                    if today <= m["date"] <= limit:
+                    # Небольшое послабление: берем матчи с сегодняшнего дня (или вчерашние, если пост вышел ночью)
+                    if today - timedelta(days=1) <= m["date"] <= limit:
                         key = (m["date"], src, m["raw_teams"])
                         prev = best.get(key)
                         if not prev or m["posted"] > prev["posted"]:
@@ -186,15 +175,28 @@ def render(matches):
     if not matches:
         return head + "\n\nБлижайших матчей не найдено."
     out = [head, ""]
+    
+    today = datetime.now(TZ).date()
+    tomorrow = today + timedelta(days=1)
+    
     for m in matches:
         d = m["date"]
-        when = f"{WEEKDAYS[d.weekday()]}, {d:%d.%m}"
+        
+        # Красивое отображение дат
+        if d == today:
+            when = f"Сегодня, {d:%d.%m}"
+        elif d == tomorrow:
+            when = f"Завтра, {d:%d.%m}"
+        else:
+            when = f"{WEEKDAYS[d.weekday()]}, {d:%d.%m}"
+            
         when += f" в {m['time']}" if m["time"] else " (время уточняется)"
+        
         safe_text = html.escape(m['text']).replace('\n', '<br>')
         out.append(f"• <b>{when}</b>\n  {safe_text} (<a href=\"{m['link']}\">пост</a>)")
     return "\n".join(out)
 
-# ... (функции send, load_state, save_state и main остаются без изменений) ...
+# ... Остальные функции (send, load_state, save_state, main) без изменений ...
 def send(text):
     r = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
