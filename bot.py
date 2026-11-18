@@ -1,13 +1,4 @@
-"""Бот расписания Реал Бетис.
-
-Читает каналы (публичные - через t.me/s/<канал>, закрытые - через Telethon),
-ищет строки с названием команды, достаёт дату и время и публикует
-расписание в беседу.
-
-  python bot.py          - обычный режим (его вызывает планировщик)
-  python bot.py --dry    - только показать расписание в консоли
-  python bot.py --force  - отправить расписание в беседу прямо сейчас
-"""
+"""Бот расписания Реал Бетис."""
 import hashlib
 import html
 import json
@@ -57,7 +48,7 @@ def parse_date(line, ref):
                 y = int(y)
                 return date(y + 2000 if y < 100 else y, mo, d)
             result = date(ref.year, mo, d)
-            if result < ref - timedelta(days=60):  # переход через Новый год
+            if result < ref - timedelta(days=60):
                 result = date(ref.year + 1, mo, d)
             return result
         except ValueError:
@@ -68,6 +59,57 @@ def parse_date(line, ref):
 def parse_time(line):
     m = RE_TIME.search(line) or RE_TIME2.search(line)
     return f"{int(m[1]):02d}:{m[2]}" if m else ""
+
+
+def parse_ltleague_post(post, keywords):
+    """Специальный парсер для формата LT League (блоки с ⚽️, 🏟, временем)."""
+    text = post["text"]
+    results = []
+    
+    # Разбиваем пост на блоки, начиная с эмодзи мяча
+    blocks = re.split(r'(?=⚽️)', text)
+    
+    for block in blocks:
+        if not block.strip():
+            continue
+            
+        # Проверяем, есть ли ключевые слова в этом блоке
+        if not any(k in block.lower() for k in keywords):
+            continue
+            
+        # Ищем команды: «Команда 1» — «Команда 2»
+        m_teams = re.search(r'«([^»]+)»\s*[-—]\s*«([^»]+)»', block)
+        if not m_teams:
+            continue
+        teams = f"«{m_teams.group(1)}» — «{m_teams.group(2)}»"
+        
+        # Ищем стадион: 🏟...
+        m_stadium = re.search(r'🏟[^\w]*\s*(.+)', block)
+        stadium = m_stadium.group(1).strip() if m_stadium else ""
+        
+        # Ищем время. Сначала пробуем время по Москве (🇷🇺), если нет - берем первое попавшееся
+        m_time = re.search(r'🇷🇺\s*(\d{2}:\d{2})', block)
+        if not m_time:
+            m_time = re.search(r'(\d{2}:\d{2})', block)
+        time_str = m_time.group(1) if m_time else ""
+        
+        # Ищем дату в блоке (если есть), иначе берем день публикации поста
+        match_date = parse_date(block, post["posted"].date()) or post["posted"].date()
+        
+        # Формируем красивый текст
+        display_text = teams
+        if stadium:
+            display_text += f"\n🏟 {stadium}"
+            
+        results.append({
+            "date": match_date,
+            "time": time_str,
+            "text": display_text,
+            "raw_teams": teams,
+            "posted": post["posted"],
+            "link": post["link"]
+        })
+    return results
 
 
 def fetch_public(channel):
@@ -95,8 +137,6 @@ def fetch_public(channel):
 
 
 def fetch_private(invite_hash):
-    """Закрытый канал по invite-ссылке. Нужен ваш Telegram-аккаунт (Telethon),
-    и этот аккаунт должен уже состоять в канале."""
     from telethon.sessions import StringSession
     from telethon.sync import TelegramClient
     from telethon.tl.functions.messages import CheckChatInviteRequest
@@ -124,44 +164,56 @@ def fetch_private(invite_hash):
 
 
 def collect():
-    """Возвращает список матчей. Для каждой пары (дата, канал) остаётся
-    самый свежий пост - так подхватываются переносы времени.
-    Если в строке/посте нет даты, берётся дата публикации поста
-    (каналы выкладывают расписание на день)."""
     today = datetime.now(TZ).date()
     limit = today + timedelta(days=DAYS_AHEAD)
     best = {}
+    
     for ch in CFG["channels"]:
         src = ch["source"]
         keywords = [k.lower() for k in ch["keywords"]]
+        parser_type = ch.get("parser", "default") # Поддержка разных парсеров
+        
         try:
             posts = fetch_private(src[1:]) if src.startswith("+") else fetch_public(src)
-        except Exception as e:  # один сбойный канал не должен ронять всё
+        except Exception as e:
             print(f"[{src[:6]}...] ошибка: {e}", file=sys.stderr)
             continue
+            
         for p in posts:
             post_day = p["posted"].date()
             if post_day < today - timedelta(days=2):
                 continue
-            current = post_day
-            for raw in p["text"].split("\n"):
-                line = raw.strip()
-                if not line:
-                    continue
-                found = parse_date(line, post_day)
-                if found:
-                    current = found
-                if today <= current <= limit and any(k in line.lower() for k in keywords):
-                    key = (current, src)
-                    prev = best.get(key)
-                    if not prev or p["posted"] > prev["posted"]:
-                        best[key] = {
-                            "date": current,
-                            "time": parse_time(line),
-                            "text": line,
-                            "posted": p["posted"],
-                            "link": p["link"],
-                        }
+                
+            if parser_type == "ltleague":
+                parsed_matches = parse_ltleague_post(p, keywords)
+                for m in parsed_matches:
+                    if today <= m["date"] <= limit:
+                        key = (m["date"], src, m["raw_teams"])
+                        prev = best.get(key)
+                        if not prev or m["posted"] > prev["posted"]:
+                            best[key] = m
+            else:
+                # Стандартный парсер
+                current = post_day
+                for raw in p["text"].split("\n"):
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    found = parse_date(line, post_day)
+                    if found:
+                        current = found
+                    if today <= current <= limit and any(k in line.lower() for k in keywords):
+                        key = (current, src, line)
+                        prev = best.get(key)
+                        if not prev or p["posted"] > prev["posted"]:
+                            best[key] = {
+                                "date": current,
+                                "time": parse_time(line),
+                                "text": line,
+                                "posted": p["posted"],
+                                "link": p["link"],
+                            }
+                            
     return sorted(best.values(), key=lambda m: (m["date"], m["time"] or "99:99"))
 
 
@@ -174,7 +226,11 @@ def render(matches):
         d = m["date"]
         when = f"{WEEKDAYS[d.weekday()]}, {d:%d.%m}"
         when += f" в {m['time']}" if m["time"] else " (время уточняется)"
-        out.append(f"• <b>{when}</b>\n  {html.escape(m['text'])} (<a href=\"{m['link']}\">пост</a>)")
+        
+        # html.escape нужен только для ссылки и текста, но так как мы 
+        # добавили перенос строки в текст, html.escape не сломает \n
+        safe_text = html.escape(m['text']).replace('\n', '<br>')
+        out.append(f"• <b>{when}</b>\n  {safe_text} (<a href=\"{m['link']}\">пост</a>)")
     return "\n".join(out)
 
 
@@ -215,10 +271,10 @@ def main():
     digest = hashlib.md5(text.encode()).hexdigest()
 
     if "--force" in sys.argv or (now.hour >= POST_HOUR and state.get("last_daily") != today):
-        send(text)  # ежедневная публикация
+        send(text)
         state.update(last_daily=today, last_hash=digest)
     elif now.hour >= POST_HOUR and digest != state.get("last_hash"):
-        send("🔄 <b>Расписание изменилось</b>\n\n" + text)  # обновление в течение дня
+        send("🔄 <b>Расписание изменилось</b>\n\n" + text)
         state["last_hash"] = digest
     else:
         return
