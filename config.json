@@ -6,6 +6,6 @@
   "days_ahead": 7,
   "channels": [
     {"source": "+XreeVzN67SZmZDdi", "keywords": ["эвертон", "everton"]},
-    {"source": "ltleague", "keywords": ["реал бетис", "бетис", "betis"]}
+    {"source": "ltleague", "keywords": ["реал бетис", "бетис", "betis"], "parser": "ltleague"}
   ]
 }
